@@ -40,7 +40,11 @@ const RECORDED = {
     1: "12433ddcbaaed4fcea883fea30927bac312c0ec35c823167a93c480e8e79fd42",
   } as Record<number, string>,
   CONFIG_FORMAT: {
-    1: "e6305a6713f98408246fac7c27de221ca0981472028e8b62ae492129951b3650",
+    // Replaced before any release: config.yaml also takes `provider` and
+    // `base_url`, and credentials.yaml `hf_token` and `llm_api_key` (the
+    // Hugging Face and OpenAI-compatible providers), so every earlier file is
+    // still valid under it.
+    1: "7cfc332d0faefbae9142e58707f9e044d0180e37468eecbed2a3ad8cbc59d0a7",
   } as Record<number, string>,
 };
 

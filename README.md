@@ -53,6 +53,31 @@ Run `lazy-pundit init`. It asks:
 
 **The Anthropic key is optional.** With one, the LLM (Claude) writes a first draft of the intro and blurbs in your persona. With none, `draft` writes a stat line for each team instead, and you write the words yourself. To get a key, make an account at [console.anthropic.com](https://console.anthropic.com/), add a little credit to the account, and create an API key. You can add the key later with `lazy-pundit setup key`.
 
+**Using a local model instead (free).** `draft` can have a model on your own machine write the blurbs, through [Ollama](https://ollama.com): no account, no key, no spend. It writes less well than a large hosted model, and the checks that hold its claims will reject more of what it writes, so more sections keep a best attempt that `check` flags. Try a week and see.
+
+1. Install Ollama from ollama.com and pull a model: `ollama pull qwen2.5:7b`.
+2. Give the model room to read. A draft sends about 4,000 tokens before your lore, and Ollama's default window is only 2,048 to 4,096, so it silently cuts the prompt short. Make a copy of the model with a bigger window: save these two lines as a file named `Modelfile`, run `ollama create qwen2.5-16k -f Modelfile`, and check `ollama ps` shows a context of 16384.
+
+   ```
+   FROM qwen2.5:7b
+   PARAMETER num_ctx 16384
+   ```
+
+3. Tell Lazy Pundit to use it, in `config.yaml` (see Config and credentials):
+
+   ```yaml
+   provider: openai-compatible
+   model: qwen2.5-16k
+   ```
+
+4. Run `lazy-pundit doctor`. Its "LLM server" line says whether Ollama answers and has the model.
+
+A local call isn't counted against the spend cap, and needs no key. The reply is streamed, so a slow model isn't cut off while it writes. If Ollama isn't running, the draft falls back to stat lines and says how to start it.
+
+**Other OpenAI-compatible servers.** `provider: openai-compatible` works with any server that speaks the OpenAI chat API: set `base_url` (Ollama's `http://localhost:11434/v1` when not given), `model`, and a key as `LLM_API_KEY` or `llm_api_key` in `credentials.yaml` if it wants one. Hosted services such as OpenRouter or Groq have been free to try, but their terms change, so check theirs. Their calls aren't counted against the spend cap either, so add the model under `prices:` in `config.yaml` to count it.
+
+**Hugging Face.** `provider: huggingface` uses [Hugging Face's Inference Providers](https://huggingface.co/docs/inference-providers) with a token (`HF_TOKEN`, or `hf_token` in `credentials.yaml`), on `openai/gpt-oss-120b` unless `model:` names another. Free accounts no longer get included credits: a call answers 402 until you buy credits or subscribe to PRO, and the draft falls back to stat lines.
+
 **What a week spends.** A draft makes one to three LLM calls. On the default model (Claude Sonnet 5.5) a call can spend at most about $0.17 with a short lore file, so a draft at most about $0.50, and it's usually much less, since that ceiling assumes the longest possible reply. A long lore file sends more with each call, and `draft` says when it makes a draft cost more. Each call's real spend is in its transcript, and the month's total in `spend.yaml` in the config folder (see Config and credentials). The spend cap (5 USD a month by default, set with `lazy-pundit setup cap`) is checked before every call: a call that could take the month past it is never made, and the draft falls back to stat lines (or keeps the LLM's prose so far).
 
 ## A week's ranking
@@ -141,6 +166,8 @@ Environment variables:
 | Variable | Effect |
 |---|---|
 | `ANTHROPIC_API_KEY` | used instead of the stored Anthropic key |
+| `HF_TOKEN` | used instead of the stored Hugging Face token (`provider: huggingface`) |
+| `LLM_API_KEY` | used instead of the stored key for `provider: openai-compatible` |
 | `LAZY_PUNDIT_ESPN_S2` | used instead of the stored `espn_s2` cookie |
 | `XDG_CONFIG_HOME`, `XDG_CACHE_HOME` | where the config and cache folders go |
 | `LAZY_PUNDIT_CLIPBOARD=off` | publish copies nothing, for scripted runs |

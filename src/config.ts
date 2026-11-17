@@ -3,7 +3,14 @@ import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join } from "node:path";
 import { isMap, parse, parseDocument, stringify } from "yaml";
 import { type ZodType, z } from "zod";
+import { LLM_PROVIDERS } from "./anthropic.ts";
 import type { Deps } from "./deps.ts";
+import {
+  HUGGING_FACE_API,
+  HUGGING_FACE_DEFAULT_MODEL,
+  OLLAMA_API,
+  OLLAMA_DEFAULT_MODEL,
+} from "./openai-compatible.ts";
 
 /**
  * The operator's files in the config folder, outside any workspace:
@@ -31,11 +38,18 @@ const priceSchema = z.object({
   output_per_mtok: z.number().nonnegative(),
 });
 
+/** The model a config names when it names none. */
+export const DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-5-5";
+
 export const configSchema = z.object({
   format: z.literal(CONFIG_FORMAT),
   /** The operator's pundit name, the default for each new workspace. */
   name: z.string().min(1).optional(),
-  model: z.string().min(1).default("claude-sonnet-5-5"),
+  /** Who writes the drafts: Anthropic, Hugging Face, or an OpenAI-compatible server such as Ollama. */
+  provider: z.enum(LLM_PROVIDERS).default("anthropic"),
+  model: z.string().min(1).default(DEFAULT_ANTHROPIC_MODEL),
+  /** The API base of an OpenAI-compatible server; Ollama's on this machine when not given. */
+  base_url: z.url({ protocol: /^https?$/ }).optional(),
   /** The spend cap: the most LLM spend per calendar month, across every league. */
   spend_cap_usd: z.number().nonnegative().default(5),
   /** Prices that replace or add to the table shipped with the tool, by model. */
@@ -60,6 +74,26 @@ export const configSchema = z.object({
 
 export type Config = z.output<typeof configSchema>;
 
+/**
+ * The model a call uses: the config's, except that a provider other than
+ * Anthropic with no model named (so the Anthropic default) uses its own default.
+ */
+export function modelOf(config: Config): string {
+  if (config.model !== DEFAULT_ANTHROPIC_MODEL) return config.model;
+  if (config.provider === "huggingface") return HUGGING_FACE_DEFAULT_MODEL;
+  if (config.provider === "openai-compatible") return OLLAMA_DEFAULT_MODEL;
+  return config.model;
+}
+
+/** The API base a call goes to: none for Anthropic's, whose client has its own. */
+export function baseUrlOf(config: Config): string | undefined {
+  if (config.provider === "huggingface") return HUGGING_FACE_API;
+  if (config.provider === "openai-compatible") {
+    return config.base_url ?? OLLAMA_API;
+  }
+  return undefined;
+}
+
 /** The config with no `config.yaml`: every default. */
 export function defaultConfig(): Config {
   return configSchema.parse({ format: CONFIG_FORMAT });
@@ -68,6 +102,10 @@ export function defaultConfig(): Config {
 export const credentialsSchema = z.object({
   format: z.literal(CONFIG_FORMAT),
   anthropic_api_key: z.string().min(1).optional(),
+  /** A Hugging Face token, for `provider: huggingface`. */
+  hf_token: z.string().min(1).optional(),
+  /** A key for an OpenAI-compatible server that wants one (not Ollama). */
+  llm_api_key: z.string().min(1).optional(),
   espn_s2: z
     .object({ value: z.string().min(1), saved_at: z.iso.date() })
     .optional(),
@@ -102,6 +140,8 @@ export interface Credential {
 
 export interface Credentials {
   anthropicApiKey?: Credential;
+  huggingFaceToken?: Credential;
+  llmApiKey?: Credential;
   /** `savedAt` is the stored cookie's local date; an override has none. */
   espnS2?: Credential & { savedAt?: string };
   /** Anything the operator should fix, such as a file others can read. */
@@ -125,6 +165,12 @@ export async function loadCredentials(
   if (!result.anthropicApiKey && stored?.anthropic_api_key) {
     result.anthropicApiKey = { value: stored.anthropic_api_key, from: "file" };
   }
+  if (!result.huggingFaceToken && stored?.hf_token) {
+    result.huggingFaceToken = { value: stored.hf_token, from: "file" };
+  }
+  if (!result.llmApiKey && stored?.llm_api_key) {
+    result.llmApiKey = { value: stored.llm_api_key, from: "file" };
+  }
   if (!result.espnS2 && stored?.espn_s2) {
     result.espnS2 = {
       value: stored.espn_s2.value,
@@ -140,6 +186,12 @@ export function envCredentials(env: Deps["env"]): Credentials {
   return {
     ...(env.anthropicApiKey
       ? { anthropicApiKey: { value: env.anthropicApiKey, from: "env" } }
+      : {}),
+    ...(env.hfToken
+      ? { huggingFaceToken: { value: env.hfToken, from: "env" } }
+      : {}),
+    ...(env.llmApiKey
+      ? { llmApiKey: { value: env.llmApiKey, from: "env" } }
       : {}),
     ...(env.espnS2 ? { espnS2: { value: env.espnS2, from: "env" } } : {}),
     warnings: [],
@@ -250,7 +302,12 @@ export function exposure(
  */
 export async function saveCredentials(
   deps: Pick<Deps, "configDir" | "clock">,
-  values: { anthropicApiKey?: string; espnS2?: string },
+  values: {
+    anthropicApiKey?: string;
+    huggingFaceToken?: string;
+    llmApiKey?: string;
+    espnS2?: string;
+  },
 ): Promise<string> {
   const path = credentialsPath(deps);
   const stored = (await readConfigFile(path, credentialsSchema)) ?? {
@@ -261,6 +318,8 @@ export async function saveCredentials(
     ...(values.anthropicApiKey
       ? { anthropic_api_key: values.anthropicApiKey }
       : {}),
+    ...(values.huggingFaceToken ? { hf_token: values.huggingFaceToken } : {}),
+    ...(values.llmApiKey ? { llm_api_key: values.llmApiKey } : {}),
     ...(values.espnS2
       ? {
           espn_s2: {

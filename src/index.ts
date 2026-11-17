@@ -2,9 +2,11 @@ export {
   ANTHROPIC_API,
   anthropicLlm,
   KEY_CHECK_WAIT_MS,
+  LLM_PROVIDERS,
   type Llm,
   LlmError,
   type LlmErrorKind,
+  type LlmProvider,
   type LlmReply,
   type LlmRequest,
 } from "./anthropic.ts";
@@ -12,11 +14,13 @@ export { type CheckResult, check, type Problem } from "./check.ts";
 export { type Clipboard, systemClipboard } from "./clipboard.ts";
 export { type Clock, systemClock } from "./clock.ts";
 export {
+  baseUrlOf,
   type Config,
   ConfigFileError,
   type Credential,
   type Credentials,
   loadCredentials,
+  modelOf,
   readConfig,
   saveCredentials,
 } from "./config.ts";
@@ -132,6 +136,14 @@ export type {
 export { BENCH, isStarter } from "./league.ts";
 export { bestLineupPoints } from "./lineup.ts";
 export type { LeagueType } from "./lore.ts";
+export {
+  HUGGING_FACE_API,
+  HUGGING_FACE_DEFAULT_MODEL,
+  OLLAMA_API,
+  OLLAMA_DEFAULT_MODEL,
+  openAiCompatibleLlm,
+  routedLlm,
+} from "./openai-compatible.ts";
 export {
   type Persona,
   type PersonaRecord,

@@ -1,5 +1,6 @@
 import { access, mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
+import type { LlmProvider } from "./anthropic.ts";
 import {
   checkDraft,
   type Problem,
@@ -9,6 +10,9 @@ import {
 import {
   CONFIG_FORMAT,
   type Config,
+  ConfigFileError,
+  type Credentials,
+  configPath,
   configSchema,
   credentialsPath,
   loadCredentials,
@@ -174,7 +178,7 @@ export async function draft(
     ...leagueFileChangeWarnings(stakes, await lastPublishedMeta(dir, week)),
   ]);
   const outcomes = houseRuleOutcomes(stakes);
-  const { anthropicApiKey } = credentials;
+  const { anthropicApiKey, huggingFaceToken, llmApiKey } = credentials;
   const { persona, warnings: personaWarnings } = await loadPersona(
     ws,
     league,
@@ -183,7 +187,19 @@ export async function draft(
   warn(personaWarnings);
   const began = deps.clock.now();
   let outcome: ProseOutcome;
-  if (anthropicApiKey) {
+  // With no key at all, a config that can't be read is no reason to stop: the
+  // draft has stat lines, and `doctor` says what's wrong with the file.
+  const anyKey = Boolean(anthropicApiKey || huggingFaceToken || llmApiKey);
+  let config: Config | undefined;
+  try {
+    config =
+      (await readConfig(deps)) ?? configSchema.parse({ format: CONFIG_FORMAT });
+  } catch (err) {
+    if (anyKey || !(err instanceof ConfigFileError)) throw err;
+  }
+  const llmKey =
+    config === undefined ? undefined : llmKeyFor(config.provider, credentials);
+  if (config && llmKey !== undefined) {
     const sent = sentLore(lore, league, ws.handles);
     const stakesSent = sentStakes(stakes, league, week);
     const ctx = draftContext(
@@ -194,8 +210,6 @@ export async function draft(
       stakesSent,
       await lastBlurbs(dir, week),
     );
-    const config =
-      (await readConfig(deps)) ?? configSchema.parse({ format: CONFIG_FORMAT });
     warn([...sent.warnings, ...loreSizeWarning(ctx, config)]);
     // The LLM may cite only what it was sent; a pundit may cite any section.
     const gateNames: ValidatorNames = {
@@ -209,14 +223,15 @@ export async function draft(
     outcome = await llmProse(ctx, gateNames, data, {
       deps,
       config,
-      key: anthropicApiKey.value,
+      key: llmKey,
       transcript: { ws, week, at: began },
     });
   } else {
+    const provider = config?.provider ?? "anthropic";
     outcome = {
       prose: statLines(data, persona),
       failed: [],
-      fallback: `No Anthropic key, so the LLM didn't run: set ANTHROPIC_API_KEY, or add anthropic_api_key to ${credentialsPath(deps)}${STAT_LINES}`,
+      fallback: `${noKeyReason(provider, deps, huggingFaceToken !== undefined)}${STAT_LINES}`,
     };
   }
   const { prose, failed, fallback, llm } = outcome;
@@ -366,7 +381,8 @@ function loreSizeWarning(ctx: DraftContext, config: Config): string[] {
   if (tokens <= LORE_TOKENS_WARNED) return [];
   const size = `lore.md sends about ${tokens.toLocaleString("en-US")} tokens with every LLM call.`;
   const price = priceOf(config);
-  if (!price) return [size];
+  // Hugging Face's free credits aren't counted against the spend cap.
+  if (!price || config.provider !== "anthropic") return [size];
   const calls = 1 + GATE_RETRIES;
   const draftCost =
     calls *
@@ -380,6 +396,36 @@ function loreSizeWarning(ctx: DraftContext, config: Config): string[] {
   return [
     `${size} A draft is estimated at up to ${usd(draftCost)} (${calls} calls at most), ${usd(loreCost)} of it for lore, against your ${usd(config.spend_cap_usd)} spend cap.`,
   ];
+}
+
+/**
+ * The key a provider's calls are made with: "" for one that needs none (an
+ * OpenAI-compatible server may), undefined when it needs one and none is set.
+ */
+function llmKeyFor(
+  provider: LlmProvider,
+  credentials: Credentials,
+): string | undefined {
+  if (provider === "huggingface") return credentials.huggingFaceToken?.value;
+  if (provider === "openai-compatible") {
+    return credentials.llmApiKey?.value ?? "";
+  }
+  return credentials.anthropicApiKey?.value;
+}
+
+/** Why the LLM didn't run for want of a key or token, with the fix. */
+function noKeyReason(
+  provider: LlmProvider,
+  deps: Pick<Deps, "configDir">,
+  hasHuggingFaceToken: boolean,
+): string {
+  if (provider === "huggingface") {
+    return `No Hugging Face token, so the LLM didn't run: set HF_TOKEN, or add hf_token to ${credentialsPath(deps)}`;
+  }
+  const missing = `No Anthropic key, so the LLM didn't run: set ANTHROPIC_API_KEY, or add anthropic_api_key to ${credentialsPath(deps)}`;
+  return hasHuggingFaceToken
+    ? `${missing}. To use your Hugging Face token instead, set provider: huggingface in ${configPath(deps)}`
+    : missing;
 }
 
 /**
