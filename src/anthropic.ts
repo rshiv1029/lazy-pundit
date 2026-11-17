@@ -35,9 +35,22 @@ export async function checkAnthropicKey(
   }
 }
 
+/** Who answers the LLM's calls. */
+export const LLM_PROVIDERS = [
+  "anthropic",
+  "huggingface",
+  "openai-compatible",
+] as const;
+export type LlmProvider = (typeof LLM_PROVIDERS)[number];
+
 /** One request for prose: the key and model it runs on, and what the model reads. */
 export interface LlmRequest {
+  /** Anthropic's API key, a Hugging Face token, or a key for another server: "" for none. */
   key: string;
+  /** Who answers it; Anthropic when not given. */
+  provider?: LlmProvider;
+  /** The server's API base for an OpenAI-compatible provider. */
+  baseUrl?: string;
   model: string;
   /** The standing instructions. */
   system: string;

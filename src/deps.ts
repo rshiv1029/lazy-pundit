@@ -1,10 +1,11 @@
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { ANTHROPIC_API, anthropicLlm, type Llm } from "./anthropic.ts";
+import { ANTHROPIC_API, type Llm } from "./anthropic.ts";
 import { type Clipboard, noClipboard, systemClipboard } from "./clipboard.ts";
 import { type Clock, systemClock } from "./clock.ts";
 import { ESPN_API } from "./espn/api.ts";
 import { fileTransport } from "./file-transport.ts";
+import { routedLlm } from "./openai-compatible.ts";
 import { httpTransport, type Transport } from "./transport.ts";
 
 /**
@@ -33,6 +34,10 @@ export interface Deps {
 export interface Environment {
   /** `ANTHROPIC_API_KEY`: used instead of the stored Anthropic key. */
   anthropicApiKey?: string;
+  /** `HF_TOKEN`: used instead of the stored Hugging Face token. */
+  hfToken?: string;
+  /** `LLM_API_KEY`: used instead of the stored key for `provider: openai-compatible`. */
+  llmApiKey?: string;
   /** `LAZY_PUNDIT_ESPN_S2`: used instead of the stored `espn_s2` cookie. */
   espnS2?: string;
   /** The running Node's version, such as `v24.1.0`. */
@@ -91,6 +96,8 @@ function withoutAnthropic(replay: Transport): Transport {
  *   XDG_CONFIG_HOME        config folder, else ~/.config (then /lazy-pundit)
  *   XDG_CACHE_HOME         cache folder, else ~/.cache (then /lazy-pundit)
  *   ANTHROPIC_API_KEY      overrides the stored Anthropic key
+ *   HF_TOKEN               overrides the stored Hugging Face token
+ *   LLM_API_KEY            overrides the stored key for an OpenAI-compatible server
  *   LAZY_PUNDIT_ESPN_S2    overrides the stored espn_s2 cookie
  *   NO_COLOR               not empty: the terminal output has no bold
  *   LAZY_PUNDIT_CLIPBOARD  `off` leaves the clipboard alone, as on a machine
@@ -122,7 +129,7 @@ export function systemDeps(): Deps {
           ),
         )
       : http,
-    llm: anthropicLlm(http),
+    llm: routedLlm(http),
     clock:
       env.LAZY_PUNDIT_REPLAY && env.LAZY_PUNDIT_NOW
         ? fixedAt(env.LAZY_PUNDIT_NOW)
@@ -140,6 +147,8 @@ export function systemDeps(): Deps {
       ...(env.ANTHROPIC_API_KEY
         ? { anthropicApiKey: env.ANTHROPIC_API_KEY }
         : {}),
+      ...(env.HF_TOKEN ? { hfToken: env.HF_TOKEN } : {}),
+      ...(env.LLM_API_KEY ? { llmApiKey: env.LLM_API_KEY } : {}),
       ...(env.LAZY_PUNDIT_ESPN_S2 ? { espnS2: env.LAZY_PUNDIT_ESPN_S2 } : {}),
       nodeVersion: process.version,
       ...(env.NO_COLOR ? { noColor: true as const } : {}),

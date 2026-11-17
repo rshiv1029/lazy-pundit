@@ -2,6 +2,7 @@ import { stat } from "node:fs/promises";
 import { join } from "node:path";
 import { checkAnthropicKey } from "./anthropic.ts";
 import {
+  baseUrlOf,
   type Config,
   type Credentials,
   configPath,
@@ -10,6 +11,7 @@ import {
   envCredentials,
   exposure,
   loadCredentials,
+  modelOf,
   readConfig,
   readConfigFile,
   spendPath,
@@ -18,6 +20,7 @@ import {
 import type { Deps } from "./deps.ts";
 import { checkEspnCookie } from "./espn/fetcher.ts";
 import { ESPN_ENV_FIX, SETUP_ESPN_FIX } from "./refresh.ts";
+import { requestWithin } from "./transport.ts";
 import { readWorkspace } from "./workspace.ts";
 
 export interface DoctorCheck {
@@ -74,7 +77,7 @@ export async function doctor(deps: Deps): Promise<DoctorResult> {
 
   const credentials = await credentialsCheck(deps, checks);
   checks.push(await spendCheck(deps));
-  checks.push(await anthropicCheck(deps, credentials));
+  checks.push(await llmCheck(deps, credentials, config));
   checks.push(await espnCheck(deps, credentials, config));
   if (config) checks.push(...(await workspaceChecks(deps, config)));
   checks.push(await clipboardCheck(deps));
@@ -140,6 +143,110 @@ async function spendCheck(deps: Deps): Promise<DoctorCheck> {
       message: (err as Error).message,
       fix: `Fix ${spendPath(deps)} as the message says. Deleting it forgets this month's spend.`,
     };
+  }
+}
+
+/** How long a local server gets to say which models it has. */
+const MODELS_WAIT_MS = 5_000;
+
+/** The check for whichever provider `config.yaml` names: Anthropic by default. */
+async function llmCheck(
+  deps: Deps,
+  credentials: Credentials,
+  config: Config | undefined,
+): Promise<DoctorCheck> {
+  if (!config || config.provider === "anthropic") {
+    return anthropicCheck(deps, credentials);
+  }
+  const model = modelOf(config);
+  if (config.provider === "huggingface") {
+    const token = credentials.huggingFaceToken;
+    if (!token) {
+      return {
+        subject: "Hugging Face token",
+        status: "warn",
+        message:
+          "config.yaml says provider: huggingface, but there is no token, so drafts get stat lines.",
+        fix: "Set HF_TOKEN, or add hf_token to credentials.yaml. Hugging Face asks free accounts to buy credits for these calls.",
+      };
+    }
+    return {
+      subject: "Hugging Face token",
+      status: "note",
+      message: `Found ${token.from === "env" ? "HF_TOKEN" : "the stored token"}, for ${model}. Not checked live: Hugging Face answers a call without credits with a 402.`,
+    };
+  }
+  return serverCheck(deps, credentials, baseUrlOf(config) ?? "", model);
+}
+
+/** Asks an OpenAI-compatible server (Ollama, by default) for its models, and looks for the configured one. */
+async function serverCheck(
+  deps: Deps,
+  credentials: Credentials,
+  base: string,
+  model: string,
+): Promise<DoctorCheck> {
+  const subject = "LLM server";
+  const url = `${base.replace(/\/+$/, "")}/models`;
+  const key = credentials.llmApiKey?.value;
+  let status: number;
+  let body: string;
+  try {
+    const res = await requestWithin(
+      deps.transport,
+      {
+        url,
+        ...(key ? { headers: { authorization: `Bearer ${key}` } } : {}),
+      },
+      MODELS_WAIT_MS,
+    );
+    status = res.status;
+    body = new TextDecoder().decode(res.body);
+  } catch (err) {
+    return {
+      subject,
+      status: "warn",
+      message: `Couldn't reach ${url}: ${(err as Error).message}. Drafts get stat lines until it answers.`,
+      fix: "Start the server (for Ollama, open the app or run: ollama serve), or set base_url in config.yaml.",
+    };
+  }
+  if (status !== 200) {
+    return {
+      subject,
+      status: "warn",
+      message: `${url} answered ${status}.`,
+      fix: "Check base_url in config.yaml, and llm_api_key in credentials.yaml if the server wants a key.",
+    };
+  }
+  const ids = modelIds(body);
+  if (ids === undefined) {
+    return {
+      subject,
+      status: "note",
+      message: `${url} answered, but not with a model list, so ${model} isn't checked.`,
+    };
+  }
+  if (!ids.some((id) => id === model || id === `${model}:latest`)) {
+    const have =
+      ids.length > 0 ? ` It has: ${ids.slice(0, 8).join(", ")}.` : "";
+    return {
+      subject,
+      status: "warn",
+      message: `${model} isn't on the server.${have}`,
+      fix: `For Ollama, run: ollama pull ${model}. Or set model: in config.yaml to one it has.`,
+    };
+  }
+  return { subject, status: "ok", message: `${url} has ${model}.` };
+}
+
+/** The ids in an OpenAI-style model list, or undefined for anything else. */
+function modelIds(body: string): string[] | undefined {
+  try {
+    const list = (JSON.parse(body) as { data?: { id?: unknown }[] }).data;
+    if (!Array.isArray(list)) return undefined;
+    return list.flatMap((m) => (typeof m.id === "string" ? [m.id] : []));
+  } catch {
+    return undefined;
   }
 }
 

@@ -7,6 +7,7 @@ import {
   defaultConfig,
   listWorkspace,
   loadCredentials,
+  modelOf,
   monthSpend,
   readConfig,
   saveCredentials,
@@ -1200,9 +1201,9 @@ async function callCeiling(
 ): Promise<{ model: string; least?: number }> {
   const config = (await readConfig(deps)) ?? defaultConfig();
   const price = priceOf(config);
-  if (price === undefined) return { model: config.model };
+  if (price === undefined) return { model: modelOf(config) };
   return {
-    model: config.model,
+    model: modelOf(config),
     least: ceilingCost(price, {
       system: "",
       prompt: "",

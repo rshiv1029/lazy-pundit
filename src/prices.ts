@@ -1,5 +1,5 @@
 import type { LlmReply, LlmRequest } from "./anthropic.ts";
-import type { Config } from "./config.ts";
+import { type Config, modelOf } from "./config.ts";
 
 /** A model's price per million tokens, in US dollars. */
 export interface Price {
@@ -22,9 +22,15 @@ export const PRICE_TABLE: Readonly<Record<string, Price>> = {
  * table. Undefined for a model in neither, which is never called.
  */
 export function priceOf(config: Config): Price | undefined {
-  const { model, prices } = config;
+  const { prices } = config;
+  const model = modelOf(config);
   if (Object.hasOwn(prices, model)) return prices[model];
   if (Object.hasOwn(PRICE_TABLE, model)) return PRICE_TABLE[model];
+  // A local model costs nothing, and a hosted one's credits aren't spend this
+  // tool counts: add a price under `prices` to count a model against the cap.
+  if (config.provider !== "anthropic") {
+    return { input_per_mtok: 0, output_per_mtok: 0 };
+  }
   return undefined;
 }
 
